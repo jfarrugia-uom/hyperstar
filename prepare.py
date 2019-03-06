@@ -8,6 +8,8 @@ from gensim.models.keyedvectors import KeyedVectors
 from collections import defaultdict
 import numpy as np
 
+from copy import deepcopy
+
 """ 
 Arguments will be passed via a dictionary arg
 """
@@ -55,6 +57,18 @@ def compute_XZ(subsumptions, synonyms, w2v):
 
     return (np.array(X_index, dtype='int32'), np.array(Z_all))
 
+def get_synonymys_having_vectors(orig_synonyms, w2v):    
+    synonyms = deepcopy(orig_synonyms) 
+    # eliminate OOV from synonym list    
+    for k, v in list(synonyms.items()):
+        if k not in w2v:
+            synonyms.pop(k)
+        else:
+            for word in v:
+                if word not in w2v:
+                    v.remove(word)
+    return synonyms
+
 """
 This class is responsible for serialising the embeddings for eventual use in model training and evaluation
 """
@@ -73,8 +87,8 @@ class Prepare:
         print('Using %d embeddings dimensions.' % (self.w2v.vectors.shape[1]))
 
     def get_terms_having_vectors(self, dataset):
-        return [(q,h) for q, h in dataset if q in self.w2v and h in self.w2v]
-                
+        return [(q,h) for q, h in dataset if q in self.w2v and h in self.w2v]                    
+    
     def __call__(self, train, test):
         
         #subsumptions_train      = read_subsumptions('subsumptions-train.txt')
