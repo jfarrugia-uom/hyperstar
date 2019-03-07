@@ -5,6 +5,8 @@ import numpy as np
 from itertools import cycle
 from copy import deepcopy
 
+import random
+
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
@@ -33,7 +35,7 @@ class CrimData:
         # validation tuples
         validation = args['validation']
         # synonyms
-        synonyms = args['synonyms']
+        self.synonyms = args['synonyms']
         
         # if set to -1 then we will use full vector space vocab
         # otherwise use indicated size
@@ -41,7 +43,7 @@ class CrimData:
         if self.limited_vocab_n > -1:
             print ("Creating limited vocabulary of %d" % (self.limited_vocab_n))
             # collect words for exercise
-            flat_synonym = [word for v in synonyms.values() for word in v]
+            flat_synonym = [word for v in self.synonyms.values() for word in v]
             hyponyms  = list(set([x for x,y in train + test + validation] ))
             hypernyms = list(set([y for x,y in train + test + validation] ))
             
@@ -65,7 +67,7 @@ class CrimData:
         print ("Vocab size is %d words" % (len(self.tokenizer.index_word)))
         # initialise negative word sampler
         print ("Initialising negative sampler")
-        self.negative_sampler = make_sampler(self.tokenizer.word_index.values())
+        self.negative_sampler = make_sampler(list(self.tokenizer.word_index.values()))
         print ("Tokenising all dataset tuples")
         # tokenize dataset -> convert to numbers which will serve as embeddings lookup keys
         self.all_data_token = self.tokenizer.texts_to_sequences([[x,y] for x, y  in train + test + validation])
@@ -87,12 +89,12 @@ class CrimData:
         print ("Done!")
             
     # get list of padded synonyms
-    def sample_synonyms(self, synonyms, word_id, sample_length):
+    def sample_synonyms(self, word_id, sample_length):
         # convert word_id to word to look for in synyony dictionary
         word = self.tokenizer.index_word[word_id]
 
-        if word in synonyms:
-            _syn = synonyms[word]
+        if word in self.synonyms:
+            _syn = self.synonyms[word]
         else:
             _syn = []
 
@@ -101,13 +103,13 @@ class CrimData:
         result = np.asarray([])
         # if we have enough synonyms, we can randomly sample length-1 from list and add the hyponym itself to 
         # the list
-        if (len(syn_list) >= (length-1)):        
-            result = np.random.choice(syn_list, length-1, replace=False)
+        if (len(syn_list) >= (sample_length-1)):        
+            result = np.random.choice(syn_list, sample_length-1, replace=False)
             result = np.append(result, word_id)
         # otherwise, we pick all synyonyms and pad the sequences to match model fixed-input
         else:
             result = np.append(syn_list, word_id)
-            result = pad_sequences([result], length, padding='post', value=word_id)        
+            result = pad_sequences([result], sample_length, padding='post', value=word_id)        
 
         # we're expecting 1-D vector 
         return result.flatten()
@@ -142,4 +144,12 @@ class CrimData:
                 hyper_input[(idx * (neg_count+1)) + (m + 1)] = np.asarray(neg)
                 synonym_input[(idx * (neg_count+1)) + (m + 1)] = self.sample_synonyms(query, syn_count)
 
-        return query_input, hyper_input, synonym_input, y_input    
+        return query_input, hyper_input, synonym_input, y_input
+    
+    def token_to_words(self, dataset):
+        _q = self.tokenizer.sequences_to_texts(dataset[:,0].reshape(-1,1))
+        _h = self.tokenizer.sequences_to_texts(dataset[:,1].reshape(-1,1))
+
+        return list(zip(_q, _h))
+    
+    

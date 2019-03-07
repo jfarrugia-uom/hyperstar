@@ -16,6 +16,9 @@ import tensorflow as tf
 
 import numpy as np
 
+import semeval_eval
+import crim_evaluator
+
 # projection initialiser
 class RandomIdentity(Initializer):
     def __init__(self, dtype=dtypes.float32, std=0.01):
@@ -35,7 +38,67 @@ class RandomIdentity(Initializer):
     def get_config(self):
         return {"dtype": self.dtype.name}
 
-class MultiProjModel:
+class MultiProjModel:                
+    
+    def __init__(self, args):
+        # contains important bits such as the tokeniser, batch augmentation logic, etc.
+        self.data = args['data']
+        
+        # model parameters
+        self.batch_size        = args['batch_size']
+        self.phi_k             = args['phi_k']
+        self.lambda_c          = args['lambda_c']
+        self.epochs            = args['epochs']        
+        self.negative_sample_n = args['negative_sample_n']
+        self.synonym_sample_n  = args['synonym_sample_n']
+                
+        # build the embeddings sub-model
+        self.embeddings_layer = self.get_term_embeddings_model()        
+        
+        # build and compile mode
+        self.model = self.build_model()
+        # this object generates the predictions from a model's learned parameters
+        self.evaluator = crim_evaluator.CrimEvaluator(self.data, self.model)        
+        
+        # maintain history object which contains training metrics
+        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'test_map']}
+                               
+    # we'll model the embeddings layer as a separate model which we can resuse against the feature extraction
+    # elements downstream 
+    def get_term_embeddings_model(self):
+        hypo_input  = Input(shape=(1,), name='Hyponym')
+        neg_input = Input(shape=(self.synonym_sample_n,), name='Negative')
+        hyper_input = Input(shape=(1,), name='Hypernym')
+    
+    
+        
+        embeddings_layer_1 = Embedding(self.data.embeddings_matrix.shape[0], 
+                                       self.data.embeddings_matrix.shape[1],
+                                       input_length=1, name='TermEmbedding', 
+                                       embeddings_constraint = UnitNorm(axis=1))
+
+        embeddings_layer_2 = Embedding(self.data.embeddings_matrix.shape[0], 
+                                       self.data.embeddings_matrix.shape[1], 
+                                       input_length=self.synonym_sample_n, name='NegEmbedding', 
+                                       embeddings_constraint = UnitNorm(axis=1))
+
+
+        hypo_embedding  = embeddings_layer_1(hypo_input)    
+        neg_embedding   = embeddings_layer_2(neg_input)
+        hyper_embedding = embeddings_layer_1(hyper_input)                    
+
+        embedding_model = Model(inputs=[hypo_input, neg_input, hyper_input], 
+                                outputs=[hypo_embedding, neg_embedding, hyper_embedding])
+
+        # inject pre-trained embeddings into this mini, resusable model/layer
+        embedding_model.get_layer(name='TermEmbedding').set_weights([self.data.embeddings_matrix])
+        embedding_model.get_layer(name='TermEmbedding').trainable = False
+
+        embedding_model.get_layer(name='NegEmbedding').set_weights([self.data.embeddings_matrix])
+        embedding_model.get_layer(name='NegEmbedding').trainable = False
+
+        return embedding_model
+                                        
     
     # custom loss function which adds a regularisation term to the loss value
     def custom_loss(self, neg_phi_tensor, lambda_c):    
@@ -45,29 +108,47 @@ class MultiProjModel:
 
         return combined_loss
     
+    
+    def reset_model(self, args):                
+        # reset model parameters
+        self.batch_size        = args['batch_size']
+        self.phi_k             = args['phi_k']
+        self.lambda_c          = args['lambda_c']
+        self.epochs            = args['epochs']        
+        self.negative_sample_n = args['negative_sample_n']
+        self.synonym_sample_n  = args['synonym_sample_n']        
+        
+        self.model = self.build_model()
+        self.evaluator.set_model(self.model)        
+        
+        # reset history object which contains training metrics
+        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'test_map']}    
+    
+    
     # modification that computes similarity of each synonymy vector against every projection
     # and then calculates average similarity and regularises that
     def build_model(self):
-        hypo_input  = Input(shape=(1,), name='Hyponym')
+        hypo_input  = Input(shape=(1,), name='Hyponym')        
         neg_input = Input(shape=(self.synonym_sample_n,), name='Negative')
         hyper_input = Input(shape=(1,), name='Hypernym')
+                
+        #term_embeddings = Embedding(self.data.embeddings_matrix.shape[0], 
+        #                            self.data.embeddings_matrix.shape[1], 
+        #                            input_length=1, name='TermEmbedding')        
+
+        #neg_embeddings  = Embedding(self.data.embeddings_matrix.shape[0], 
+        #                            self.data.embeddings_matrix.shape[1], 
+        #                            input_length=self.synonym_sample_n, name='NegEmbedding')                            
+
+        #hypo_embedding  = term_embeddings(hypo_input)    
+        #neg_embedding   = neg_embeddings(neg_input)
+        #hyper_embedding = term_embeddings(hyper_input)    
         
+        hypo_embedding, neg_embedding, hyper_embedding = self.embeddings_layer([hypo_input, neg_input, hyper_input])       
 
-        term_embeddings = Embedding(self.data.embeddings_matrix.shape[0], 
-                                    self.data.embeddings_matrix.shape[1], 
-                                    input_length=1, name='TermEmbedding')        
-
-        neg_embeddings  = Embedding(self.data.embeddings_matrix.shape[0], 
-                                    self.data.embeddings_matrix.shape[1], 
-                                    input_length=self.synonym_sample_n, name='NegEmbedding')            
-
-        hypo_embedding  = term_embeddings(hypo_input)    
-        neg_embedding   = neg_embeddings(neg_input)
-        hyper_embedding = term_embeddings(hyper_input)    
-
-        hypo_embedding  = Dropout(0.3, name='Dropout_Hypo')(hypo_embedding)
-        hyper_embedding = Dropout(0,3, name='Dropout_Hyper')(hyper_embedding)
-        neg_embedding   = Dropout(0,3, name='Dropout_Neg')(neg_embedding)
+        hypo_embedding  = Dropout(rate=0.3, name='Dropout_Hypo')(hypo_embedding)
+        hyper_embedding = Dropout(rate=0.3, name='Dropout_Hyper')(hyper_embedding)
+        neg_embedding   = Dropout(rate=0.3, name='Dropout_Neg')(neg_embedding)
 
         phi_layer = []
         for i in range(self.phi_k):
@@ -84,7 +165,7 @@ class MultiProjModel:
         else:
             phi = Concatenate(axis=1)(phi_layer)
 
-        phi = Dropout(0.3, name='Dropout_Phi')(phi)
+        phi = Dropout(rate=0.3, name='Dropout_Phi')(phi)
 
         # compute mean phi projection
         #phi_mean = Lambda(lambda x: K.mean(x, axis=1, keepdims=True))(phi)    
@@ -114,42 +195,23 @@ class MultiProjModel:
 
         model = Model(inputs=[hypo_input, neg_input, hyper_input], outputs=prediction)    
 
-        model.get_layer(name='TermEmbedding').set_weights([self.data.embeddings_matrix])    
-        model.get_layer(name='NegEmbedding').set_weights([self.data.embeddings_matrix])    
-        model.get_layer(name='TermEmbedding').trainable = False
-        model.get_layer(name='NegEmbedding').trainable = False
+        #model.get_layer(name='TermEmbedding').set_weights([self.data.embeddings_matrix])    
+        #model.get_layer(name='NegEmbedding').set_weights([self.data.embeddings_matrix])    
+        #model.get_layer(name='TermEmbedding').trainable = False
+        #model.get_layer(name='NegEmbedding').trainable = False
 
         regul_loss = self.custom_loss(phi_negative, self.lambda_c)
         adam = Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.9, clipnorm=1.)
         model.compile(optimizer=adam, loss=regul_loss, metrics=['accuracy'])
         return model
-                
     
-    def __init__(self, args):
-        # contains important bits such as the tokeniser, batch augmentation logic, etc.
-        self.data = args['data']
-        
-        # model parameters
-        self.batch_size        = args['batch_size']
-        self.phi_k             = args['phi_k']
-        self.lambda_c          = args['lambda_c']
-        self.epochs            = args['epochs']        
-        self.negative_sample_n = args['negative_sample_n']
-        self.synonym_sample_n  = args['synonym_sample_n']
-        
-        # this object generates the predictions from a model's learned parameters
-        self.evaluator = args['evaluator']
-        # this object scores the predictions according to MRR, MAP, P@k (k in {1,5,10,15})
-        self.scorer = args['scorer']
-                                
-        # build and compile model
-        self.model = self.build_model()
-        
-        # maintain history object which contains training metrics
-        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss']}
-               
+    
     def fit(self, train_data, test_data):
         
+        # maintain internal scorer to validate test_data
+        test_tuples = self.data.token_to_words(test_data)
+        scorer = semeval_eval.HypernymEvaluation(test_tuples)
+                
         print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d" % (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n))
                 
         samples = np.arange(len(train_data))    
