@@ -31,7 +31,7 @@ def read_subsumptions(filename):
 
     return subsumptions
 
-def read_synonyms(filename):
+def read_synonyms(filename, hypernym_word_dict):
     synonyms = defaultdict(lambda: list())
 
     with codecs.open(filename,encoding='utf-8') as f:
@@ -39,7 +39,8 @@ def read_synonyms(filename):
 
         for row in reader:
             for word in row[1].split(','):
-                synonyms[row[0]].append(word)
+                if (row[0] in hypernym_word_dict and word not in hypernym_word_dict[row[0]]):
+                    synonyms[row[0]].append(word)
 
     return synonyms
 
@@ -76,6 +77,7 @@ class Prepare:
     def __init__(self, args):
         self.args = args
         self.RANDOM_SEED = self.args['seed']
+        self.hyper_dict = self.args['hyper_dict']
         
         random.seed(self.RANDOM_SEED)
         
@@ -99,7 +101,7 @@ class Prepare:
         self.subsumptions_train = self.get_terms_having_vectors(train)
         self.subsumptions_test = self.get_terms_having_vectors(test)
                 
-        self.synonyms = read_synonyms('synonyms.txt')        
+        self.synonyms = read_synonyms('synonyms.txt', self.hyper_dict)        
         # eliminate OOV from synonym list
         for k, v in list(self.synonyms.items()):
             if k not in self.w2v:

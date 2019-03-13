@@ -19,6 +19,42 @@ import numpy as np
 import semeval_eval
 import crim_evaluator
 
+
+# we'll model the embeddings layer as a separate model which we can resuse against the feature extraction
+# elements downstream 
+def get_embeddings_model(embeddings_matrix, synonym_sample_n):
+    hypo_input  = Input(shape=(1,), name='Hyponym')
+    neg_input = Input(shape=(synonym_sample_n,), name='Negative')
+    hyper_input = Input(shape=(1,), name='Hypernym')
+
+
+    embeddings_layer_1 = Embedding(embeddings_matrix.shape[0], 
+                                   embeddings_matrix.shape[1],
+                                   input_length=1, name='TermEmbedding', 
+                                   embeddings_constraint = UnitNorm(axis=1))
+
+    embeddings_layer_2 = Embedding(embeddings_matrix.shape[0], 
+                                   embeddings_matrix.shape[1], 
+                                   input_length=synonym_sample_n, name='NegEmbedding', 
+                                   embeddings_constraint = UnitNorm(axis=1))
+
+
+    hypo_embedding  = embeddings_layer_1(hypo_input)    
+    neg_embedding   = embeddings_layer_2(neg_input)
+    hyper_embedding = embeddings_layer_1(hyper_input)                    
+
+    embedding_model = Model(inputs=[hypo_input, neg_input, hyper_input], 
+                            outputs=[hypo_embedding, neg_embedding, hyper_embedding])
+
+    # inject pre-trained embeddings into this mini, resusable model/layer
+    embedding_model.get_layer(name='TermEmbedding').set_weights([embeddings_matrix])
+    embedding_model.get_layer(name='TermEmbedding').trainable = False
+
+    embedding_model.get_layer(name='NegEmbedding').set_weights([embeddings_matrix])
+    embedding_model.get_layer(name='NegEmbedding').trainable = False
+
+    return embedding_model
+
 # projection initialiser
 class RandomIdentity(Initializer):
     def __init__(self, dtype=dtypes.float32, std=0.01):
@@ -45,15 +81,21 @@ class MultiProjModel:
         self.data = args['data']
         
         # model parameters
+        self.embeddings_layer  = args['embeddings_layer']
         self.batch_size        = args['batch_size']
         self.phi_k             = args['phi_k']
         self.lambda_c          = args['lambda_c']
         self.epochs            = args['epochs']        
         self.negative_sample_n = args['negative_sample_n']
-        self.synonym_sample_n  = args['synonym_sample_n']
+        self.synonym_sample_n  = args['synonym_sample_n']        
+        
+        # set  patience > epochs to avoid early stop
+        self.patience          = args['patience']
+        self.save_path         = args['save_path']
+        self.eval_after_epoch  = args['eval_after_epoch']
                 
         # build the embeddings sub-model
-        self.embeddings_layer = self.get_term_embeddings_model()        
+        #self.embeddings_layer = self.get_term_embeddings_model()        
         
         # build and compile mode
         self.model = self.build_model()
@@ -61,43 +103,8 @@ class MultiProjModel:
         self.evaluator = crim_evaluator.CrimEvaluator(self.data, self.model)        
         
         # maintain history object which contains training metrics
-        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'test_map']}
+        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'MAP', 'MRR']}
                                
-    # we'll model the embeddings layer as a separate model which we can resuse against the feature extraction
-    # elements downstream 
-    def get_term_embeddings_model(self):
-        hypo_input  = Input(shape=(1,), name='Hyponym')
-        neg_input = Input(shape=(self.synonym_sample_n,), name='Negative')
-        hyper_input = Input(shape=(1,), name='Hypernym')
-    
-    
-        
-        embeddings_layer_1 = Embedding(self.data.embeddings_matrix.shape[0], 
-                                       self.data.embeddings_matrix.shape[1],
-                                       input_length=1, name='TermEmbedding', 
-                                       embeddings_constraint = UnitNorm(axis=1))
-
-        embeddings_layer_2 = Embedding(self.data.embeddings_matrix.shape[0], 
-                                       self.data.embeddings_matrix.shape[1], 
-                                       input_length=self.synonym_sample_n, name='NegEmbedding', 
-                                       embeddings_constraint = UnitNorm(axis=1))
-
-
-        hypo_embedding  = embeddings_layer_1(hypo_input)    
-        neg_embedding   = embeddings_layer_2(neg_input)
-        hyper_embedding = embeddings_layer_1(hyper_input)                    
-
-        embedding_model = Model(inputs=[hypo_input, neg_input, hyper_input], 
-                                outputs=[hypo_embedding, neg_embedding, hyper_embedding])
-
-        # inject pre-trained embeddings into this mini, resusable model/layer
-        embedding_model.get_layer(name='TermEmbedding').set_weights([self.data.embeddings_matrix])
-        embedding_model.get_layer(name='TermEmbedding').trainable = False
-
-        embedding_model.get_layer(name='NegEmbedding').set_weights([self.data.embeddings_matrix])
-        embedding_model.get_layer(name='NegEmbedding').trainable = False
-
-        return embedding_model
                                         
     
     # custom loss function which adds a regularisation term to the loss value
@@ -111,12 +118,16 @@ class MultiProjModel:
     
     def reset_model(self, args):                
         # reset model parameters
+        self.embeddings_layer  = args['embeddings_layer']
         self.batch_size        = args['batch_size']
         self.phi_k             = args['phi_k']
         self.lambda_c          = args['lambda_c']
         self.epochs            = args['epochs']        
         self.negative_sample_n = args['negative_sample_n']
-        self.synonym_sample_n  = args['synonym_sample_n']        
+        self.synonym_sample_n  = args['synonym_sample_n'] 
+        self.patience          = args['patience']
+        self.save_path         = args['save_path']
+        self.eval_after_epoch  = args['eval_after_epoch']
         
         self.model = self.build_model()
         self.evaluator.set_model(self.model)        
@@ -131,19 +142,7 @@ class MultiProjModel:
         hypo_input  = Input(shape=(1,), name='Hyponym')        
         neg_input = Input(shape=(self.synonym_sample_n,), name='Negative')
         hyper_input = Input(shape=(1,), name='Hypernym')
-                
-        #term_embeddings = Embedding(self.data.embeddings_matrix.shape[0], 
-        #                            self.data.embeddings_matrix.shape[1], 
-        #                            input_length=1, name='TermEmbedding')        
-
-        #neg_embeddings  = Embedding(self.data.embeddings_matrix.shape[0], 
-        #                            self.data.embeddings_matrix.shape[1], 
-        #                            input_length=self.synonym_sample_n, name='NegEmbedding')                            
-
-        #hypo_embedding  = term_embeddings(hypo_input)    
-        #neg_embedding   = neg_embeddings(neg_input)
-        #hyper_embedding = term_embeddings(hyper_input)    
-        
+                        
         hypo_embedding, neg_embedding, hyper_embedding = self.embeddings_layer([hypo_input, neg_input, hyper_input])       
 
         hypo_embedding  = Dropout(rate=0.3, name='Dropout_Hypo')(hypo_embedding)
@@ -194,12 +193,7 @@ class MultiProjModel:
 
 
         model = Model(inputs=[hypo_input, neg_input, hyper_input], outputs=prediction)    
-
-        #model.get_layer(name='TermEmbedding').set_weights([self.data.embeddings_matrix])    
-        #model.get_layer(name='NegEmbedding').set_weights([self.data.embeddings_matrix])    
-        #model.get_layer(name='TermEmbedding').trainable = False
-        #model.get_layer(name='NegEmbedding').trainable = False
-
+        
         regul_loss = self.custom_loss(phi_negative, self.lambda_c)
         adam = Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.9, clipnorm=1.)
         model.compile(optimizer=adam, loss=regul_loss, metrics=['accuracy'])
@@ -212,14 +206,18 @@ class MultiProjModel:
         test_tuples = self.data.token_to_words(test_data)
         scorer = semeval_eval.HypernymEvaluation(test_tuples)
                 
-        print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d" % (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n))
+        print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d" %\
+               (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n))
                 
         samples = np.arange(len(train_data))    
         validation_samples = np.arange(len(test_data))
         
         # initialise history object
-        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss']}
-                
+        self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'MAP', 'MRR']}
+                                                 
+        self.best_MAP = 0.
+        no_gain_n = 0
+        
         for epoch in range(self.epochs):
             # reset loss and update counts
             loss = 0.       
@@ -257,11 +255,58 @@ class MultiProjModel:
                 test_update_count += 1
 
             
+            if self.eval_after_epoch:
+                # compute MAP on validation set
+                predictions = self.evaluator.predict(test_data)
+                score_names, all_scores = scorer.get_evaluation_scores(predictions)
+
+                scores = {s:0.0 for s in score_names }
+                for k in range(len(score_names)):    
+                    scores[score_names[k]] = float('%.5f' %\
+                                             (sum([score_list[k] for score_list in all_scores]) / len(all_scores)))    
+
+                epoch_test_map = scores['MAP']
+                epoch_test_mrr = scores['MRR']
+                self.history['MAP'].append(epoch_test_map)
+                self.history['MRR'].append(epoch_test_mrr)                        
+            else:
+                self.history['MAP'].append(0.)
+                self.history['MRR'].append(0.)
+                                                             
             self.history['epoch'].append(epoch)
             self.history['loss'].append(round(loss/train_update_count, 5))
-            self.history['test_loss'].append(round(test_loss/test_update_count, 5))
-            # TODO: write early stopping; computation of MAP
+            self.history['test_loss'].append(round(test_loss/test_update_count, 5))            
                                     
-            print ("Epoch: %d; Training Loss: %0.5f; Test Loss: %0.5f" %  (epoch+1, round(loss/train_update_count, 5), round(test_loss/test_update_count, 5)))
+            print ("Epoch: %d; Training Loss: %0.5f; Test Loss: %0.5f; Test MAP: %0.5f; Test MRR: %0.5f" %\
+                   (epoch+1, round(loss/train_update_count, 5), 
+                             round(test_loss/test_update_count, 5), epoch_test_map, epoch_test_mrr))
+                                
+            # check whether to stop early
+            if (epoch_test_map > self.best_MAP):
+                self.best_MAP = epoch_test_map
+                self.save_model()
+                no_gain_n = 0
+            # execute at least 3 epochs
+            elif (epoch >= 3):
+                no_gain_n += 1
+                        
+            if (no_gain_n >= self.patience):
+                print ("Early Stop invoked at epoch %d" % (epoch+1))
+                # load last best model
+                self.load_model()
+                break
+                                                                                                         
+        print ("Done!")
 
+    def save_model(self):
+        # save all weights except embeddings which do not change and so don't need to be persistd
+        weights = self.model.get_weights()[2:]        
+        np.savez_compressed(self.save_path, weights=weights)
+    
+    def load_model(self):
+        weights = np.load(self.save_path)
+        self.model.set_weights([self.data.embeddings_matrix]*2 + weights['weights'].tolist())                        
+                                 
+        # this object generates the predictions from a model's learned parameters
+        self.evaluator.set_model(self.model)        
   

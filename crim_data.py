@@ -103,7 +103,7 @@ class CrimData:
         result = np.asarray([])
         # if we have enough synonyms, we can randomly sample length-1 from list and add the hyponym itself to 
         # the list
-        if (len(syn_list) >= (sample_length-1)):        
+        if (sample_length > 1 and len(syn_list) >= (sample_length-1)):        
             result = np.random.choice(syn_list, sample_length-1, replace=False)
             result = np.append(result, word_id)
         # otherwise, we pick all synyonyms and pad the sequences to match model fixed-input
@@ -132,17 +132,18 @@ class CrimData:
         y_input = np.zeros(len(query_batch) * (neg_count+1))
 
 
-        for idx, (query, hyper) in enumerate(query_batch):#zip(query_batch, hyper_batch)):    
+        for idx, (query, hyper) in enumerate(query_batch):
             query_input[idx * (neg_count+1)] = np.asarray(query)
             hyper_input[idx * (neg_count+1)] = np.asarray(hyper)
             synonym_input[idx * (neg_count+1)] = self.sample_synonyms(query, syn_count)
             y_input[idx * (neg_count+1)] = 1
 
-            negatives = self.get_negative_random(word_id=query, neg_count=neg_count)
-            for m, neg in enumerate(negatives):
-                query_input[(idx * (neg_count+1)) + (m + 1)] = np.asarray(query)
-                hyper_input[(idx * (neg_count+1)) + (m + 1)] = np.asarray(neg)
-                synonym_input[(idx * (neg_count+1)) + (m + 1)] = self.sample_synonyms(query, syn_count)
+            if neg_count > 0:
+                negatives = self.get_negative_random(word_id=query, neg_count=neg_count)
+                for m, neg in enumerate(negatives):
+                    query_input[(idx * (neg_count+1)) + (m + 1)] = np.asarray(query)
+                    hyper_input[(idx * (neg_count+1)) + (m + 1)] = np.asarray(neg)
+                    synonym_input[(idx * (neg_count+1)) + (m + 1)] = self.sample_synonyms(query, syn_count)
 
         return query_input, hyper_input, synonym_input, y_input
     
