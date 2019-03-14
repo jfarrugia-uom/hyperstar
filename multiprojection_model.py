@@ -87,7 +87,8 @@ class MultiProjModel:
         self.lambda_c          = args['lambda_c']
         self.epochs            = args['epochs']        
         self.negative_sample_n = args['negative_sample_n']
-        self.synonym_sample_n  = args['synonym_sample_n']        
+        self.synonym_sample_n  = args['synonym_sample_n']     
+        self.lr                = args['lr']
         
         # set  patience > epochs to avoid early stop
         self.patience          = args['patience']
@@ -128,6 +129,7 @@ class MultiProjModel:
         self.patience          = args['patience']
         self.save_path         = args['save_path']
         self.eval_after_epoch  = args['eval_after_epoch']
+        self.lr                = args['lr']
         
         self.model = self.build_model()
         self.evaluator.set_model(self.model)        
@@ -195,7 +197,7 @@ class MultiProjModel:
         model = Model(inputs=[hypo_input, neg_input, hyper_input], outputs=prediction)    
         
         regul_loss = self.custom_loss(phi_negative, self.lambda_c)
-        adam = Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.9, clipnorm=1.)
+        adam = Adam(lr = self.lr, beta_1 = 0.9, beta_2 = 0.9, clipnorm=1.)
         model.compile(optimizer=adam, loss=regul_loss, metrics=['accuracy'])
         return model
     
@@ -206,8 +208,8 @@ class MultiProjModel:
         test_tuples = self.data.token_to_words(test_data)
         scorer = semeval_eval.HypernymEvaluation(test_tuples)
                 
-        print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d" %\
-               (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n))
+        print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d; lr=%0.5f" %\
+               (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n, self.lr))
                 
         samples = np.arange(len(train_data))    
         validation_samples = np.arange(len(test_data))
@@ -267,15 +269,16 @@ class MultiProjModel:
 
                 epoch_test_map = scores['MAP']
                 epoch_test_mrr = scores['MRR']
-                self.history['MAP'].append(epoch_test_map)
-                self.history['MRR'].append(epoch_test_mrr)                        
+                
             else:
-                self.history['MAP'].append(0.)
-                self.history['MRR'].append(0.)
-                                                             
+                epoch_test_map = 0.
+                epoch_test_mrr = 0.                
+                                                                         
             self.history['epoch'].append(epoch)
             self.history['loss'].append(round(loss/train_update_count, 5))
             self.history['test_loss'].append(round(test_loss/test_update_count, 5))            
+            self.history['MAP'].append(epoch_test_map)
+            self.history['MRR'].append(epoch_test_mrr)                        
                                     
             print ("Epoch: %d; Training Loss: %0.5f; Test Loss: %0.5f; Test MAP: %0.5f; Test MRR: %0.5f" %\
                    (epoch+1, round(loss/train_update_count, 5), 

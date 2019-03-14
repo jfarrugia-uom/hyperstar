@@ -24,12 +24,12 @@ class CrimEvaluator:
         y_hat /= np.linalg.norm(y_hat, axis=1).reshape(-1,1)
         
         # combine projection with cluster weights and add bias terms
-        sim_matrix = np.dot(cluster_weight.T, np.dot(emb_matrix, y_hat.T).T) + bias
+        sim_matrix = np.dot(cluster_weight.T, np.dot(emb_matrix[1:], y_hat.T).T) + bias
         # sort in descending order of linear combination of similarity
         sorted_sim = np.argsort(sim_matrix.flatten())[::-1][:topN]
         
         # reverse indices to words and also returns values
-        return list(map(lambda x: self.data.tokenizer.index_word[x], sorted_sim)), sim_matrix.flatten()[sorted_sim]
+        return list(map(lambda x: self.data.tokenizer.index_word[x+1], sorted_sim)), sim_matrix.flatten()[sorted_sim]
         
       
     def predict_word(self, word, topN=15):

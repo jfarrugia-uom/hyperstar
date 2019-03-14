@@ -132,6 +132,7 @@ class YamaneEnsemble(Sequence):
         # contains important bits such as the tokeniser, batch augmentation logic, etc.
         self.data = args['data'] 
         # this object generates the predictions from a model's learned parameters
+        self.ensemble = []
         self.evaluator = yamane_evaluator.YamaneEvaluator(self.data, self.ensemble) 
         
         self.reset_ensemble(args)        
