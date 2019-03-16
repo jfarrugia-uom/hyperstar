@@ -7,7 +7,7 @@ from tensorflow.keras.initializers import Initializer, RandomNormal, Zeros, Ones
 from tensorflow.keras.regularizers import l2, l1, l1_l2
 from tensorflow.keras.constraints import UnitNorm, MinMaxNorm
 
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam, Adadelta
 
 from tensorflow.python.framework import dtypes
 
@@ -89,6 +89,9 @@ class MultiProjModel:
         self.negative_sample_n = args['negative_sample_n']
         self.synonym_sample_n  = args['synonym_sample_n']     
         self.lr                = args['lr']
+        self.beta1             = args['beta1']
+        self.beta2             = args['beta2']
+        self.clip_value        = args['clip_value']
         
         # set  patience > epochs to avoid early stop
         self.patience          = args['patience']
@@ -130,6 +133,9 @@ class MultiProjModel:
         self.save_path         = args['save_path']
         self.eval_after_epoch  = args['eval_after_epoch']
         self.lr                = args['lr']
+        self.beta1             = args['beta1']
+        self.beta2             = args['beta2']
+        self.clip_value        = args['clip_value']
         
         self.model = self.build_model()
         self.evaluator.set_model(self.model)        
@@ -197,7 +203,8 @@ class MultiProjModel:
         model = Model(inputs=[hypo_input, neg_input, hyper_input], outputs=prediction)    
         
         regul_loss = self.custom_loss(phi_negative, self.lambda_c)
-        adam = Adam(lr = self.lr, beta_1 = 0.9, beta_2 = 0.9, clipnorm=1.)
+        adam = Adam(lr = self.lr, beta_1 = self.beta1, beta_2 = self.beta2, clipnorm=self.clip_value)
+        #adam = Adadelta()
         model.compile(optimizer=adam, loss=regul_loss, metrics=['accuracy'])
         return model
     
@@ -208,8 +215,10 @@ class MultiProjModel:
         test_tuples = self.data.token_to_words(test_data)
         scorer = semeval_eval.HypernymEvaluation(test_tuples)
                 
-        print ("Fitting model with following parameters: batch_size=%d; phi_k=%d; lambda_c=%0.2f; epochs=%d; negative_count=%d; synonym_count=%d; lr=%0.5f" %\
-               (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n, self.lr))
+        print ("Fitting model with following parameters:\n batch_size=%d;\n phi_k=%d;\n lambda_c=%0.2f;\n epochs=%d;\n negative_count=%d;\n synonym_count=%d" %\
+               (self.batch_size, self.phi_k, self.lambda_c, self.epochs, self.negative_sample_n, self.synonym_sample_n))        
+        print ("Optimizer parameters:\n lr=%0.5f;\n beta1=%0.3f;\n beta2=%0.3f;\n clip=%0.2f" % (self.lr, self.beta1, self.beta2, self.clip_value))
+        print ("-"*20)
                 
         samples = np.arange(len(train_data))    
         validation_samples = np.arange(len(test_data))

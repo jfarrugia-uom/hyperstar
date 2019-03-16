@@ -148,6 +148,7 @@ class YamaneEnsemble(Sequence):
         self.lr = args['lr']
         self.save_path = args['save_path']
         self.patience = args['patience']
+        self.eval_after_epoch  = args['eval_after_epoch']
                 
         # initialise internal list of clusters
         self.ensemble = []        
@@ -210,8 +211,8 @@ class YamaneEnsemble(Sequence):
         test_tuples = self.data.token_to_words(test_data)
         scorer = semeval_eval.HypernymEvaluation(test_tuples)
 
-        print ("Fitting model with following parameters: lambda_c=%0.2f; epochs=%d; negative_count=%d; lr=%0.5f" %\
-              (self.lambda_c, self.epochs, self.negative_sample_n, self.lr))
+        print ("Fitting model with following parameters:\n lambda_c=%0.2f;\n epochs=%d;\n negative_count=%d;\n lr=%0.5f;\n eval_after_epoch:%s" %\
+              (self.lambda_c, self.epochs, self.negative_sample_n, self.lr, self.eval_after_epoch))
         
         # this list stores which cluster each training sequence pertains to
         self.sample_clusters = np.zeros(len(train_data), dtype='int32')
@@ -255,7 +256,7 @@ class YamaneEnsemble(Sequence):
                 
 
             # compute validation loss after first epoch of training is complete
-            if (1==0):
+            if (1==1):
                 for idx, i in enumerate(validation_indices):                
 
                     # complement +ve sample with negatives to compare loss with training phase
@@ -270,21 +271,24 @@ class YamaneEnsemble(Sequence):
 
             # calculate average loss per cluster
             for c in self.ensemble:
-                c.after_epoch()            
-                                
-            # compute MAP on validation set
-            predictions = self.evaluator.predict(test_data)
-            score_names, all_scores = scorer.get_evaluation_scores(predictions)
-            
-            scores = {s:0.0 for s in score_names }
-            for k in range(len(score_names)):    
-                scores[score_names[k]] = float('%.5f' % (sum([score_list[k] for score_list in all_scores]) / len(all_scores)))    
-
-            epoch_test_map = scores['MAP']
-            epoch_test_mrr = scores['MRR']
-            self.history['MAP'].append(epoch_test_map)
-            self.history['MRR'].append(epoch_test_mrr)
+                c.after_epoch()                                                        
                         
+            if self.eval_after_epoch:
+                # compute MAP on validation set
+                predictions = self.evaluator.predict(test_data)
+                score_names, all_scores = scorer.get_evaluation_scores(predictions)
+                scores = {s:0.0 for s in score_names }
+                for k in range(len(score_names)):    
+                    scores[score_names[k]] = float('%.5f' %\
+                                             (sum([score_list[k] for score_list in all_scores]) / len(all_scores)))    
+
+                epoch_test_map = scores['MAP']
+                epoch_test_mrr = scores['MRR']
+            else:
+                epoch_test_map = 0.
+                epoch_test_mrr = 0.                                                                
+                        
+            
             # calculate mean train and test loss across all clusters                        
             self.history['epoch'].append(epoch)
             self.history['clusters'].append(len(self.ensemble))
@@ -294,9 +298,10 @@ class YamaneEnsemble(Sequence):
             
             epoch_test_loss = round(np.mean([c.test_loss[::-1][0] for c in self.ensemble]), 5)
             self.history['test_loss'].append(epoch_test_loss)
+            self.history['MAP'].append(epoch_test_map)
+            self.history['MRR'].append(epoch_test_mrr)
                         
-            print ("Epoch: %d; Clusters: %d; Training Loss: %0.5f; Test MAP: %0.5f; Test MRR: %0.5f" %\
-                       (epoch+1, len(self.ensemble), epoch_training_loss, epoch_test_map, epoch_test_mrr))
+            print ("Epoch: %d; Clusters: %d; Training Loss: %0.5f; Test Loss: %0.5f; Test MAP: %0.5f; Test MRR: %0.5f" % (epoch+1, len(self.ensemble), epoch_training_loss, epoch_test_loss, epoch_test_map, epoch_test_mrr))
             
             # check whether to stop early
             if (epoch_test_map > self.best_MAP):
