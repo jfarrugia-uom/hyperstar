@@ -34,10 +34,17 @@ class SemevalData(crim_data.CrimData):
         # create emtpy synonym dictionary not to break dependency
         self.synonyms = {}
         
+                
         print ("Creating tokenizer")        
         # collect words for exercise                                        
         hyponyms  = list(set([x for x,y in train['Both'] + test['Both'] + validation['Both']]))
         hypernyms = list(set([y for x,y in train['Both'] + test['Both'] + validation['Both']]))
+        
+        # create dictionary indicating whether hyponym is concept (1) or entity (0)
+        self.concept_dictionary = {}
+        concepts = set([x for x,y in train['Concept'] + test['Concept'] + validation['Concept']])
+        for h in hyponyms:
+            self.concept_dictionary[h] = 1 if h in concepts else 0
 
         # dataset set vocab
         vocab = list(set(hyponyms + hypernyms + vocab))
