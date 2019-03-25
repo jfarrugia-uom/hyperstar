@@ -128,8 +128,8 @@ class MultiProjModelDual:
         
         prediction = Dense(1, 
                            activation="sigmoid", name='Prediction',
-                           use_bias=True
-                           #kernel_initializer='random_normal', bias_initializer=Zeros(),                                                              
+                           use_bias=True,
+                           kernel_initializer='random_normal', bias_initializer=Zeros(),                                                              
                            ) (phi_hyper)
                 
         model = Model(inputs=[hypo_input, neg_input, hyper_input], outputs=prediction)
@@ -167,24 +167,35 @@ class MultiProjModelDual:
             train_update_count = 0
             test_update_count = 0
 
-            # shuffle training samples in place
-            np.random.shuffle(samples)    
-            for idx, i in enumerate(samples): 
-                # print status
-                if (idx + 1) % 1000 == 0:
-                    print ("Processed ", idx+1, "samples...")                                
-                                                                
-                # complement single +ve sample with negatives
-                query_input, hyper_input, neg_input, y_input =\
-                    self.data.get_augmented_batch(train_data[i:i+1], self.negative_sample_n, 1)                    
-                                                       
-                if self.data.is_concept[i] == 1:
-                    # check whether sample is concept or entity and train on respective model
-                    loss += self.concept_model.train_on_batch([query_input, neg_input, hyper_input], y_input)[0]
-                else:
-                    loss += self.entity_model.train_on_batch([query_input, neg_input, hyper_input], y_input)[0]
+            # shuffle training samples in place                                           
+            np.random.shuffle(samples)                            
+            
+            for b in range(0, len(samples), self.batch_size):
+                # get mini batch composed of INDICES
+                mini_batch = samples[b:b + self.batch_size]
                 
-                train_update_count += 1
+                # ids of training data ids, split by concepts and entities
+                mini_concept_ids = np.where(self.data.is_concept[mini_batch]==1)[0]
+                mini_entity_ids  = np.where(self.data.is_concept[mini_batch]==0)[0]
+                                
+                # we need to find the minit batch ids which points to the training data samples
+                concept_batch = train_data[mini_batch[mini_concept_ids]]
+                entity_batch = train_data[mini_batch[mini_entity_ids]]                
+                # train concepts examples
+                # complement single +ve sample with negatives
+                if concept_batch.shape[0] > 0:
+                    query_input, hyper_input, neg_input, y_input =\
+                        self.data.get_augmented_batch(concept_batch, self.negative_sample_n, 1)                    
+                                                            
+                    loss += self.concept_model.train_on_batch([query_input, neg_input, hyper_input], y_input)[0]
+                    train_update_count += 1
+                
+                if entity_batch.shape[0] > 0:
+                    query_input, hyper_input, neg_input, y_input =\
+                        self.data.get_augmented_batch(entity_batch, self.negative_sample_n, 1)                    
+                    
+                    loss += self.entity_model.train_on_batch([query_input, neg_input, hyper_input], y_input)[0]
+                    train_update_count += 1                                
 
             
             if self.eval_after_epoch:
@@ -226,26 +237,40 @@ class MultiProjModelDual:
             if (no_gain_n >= self.patience):
                 print ("Early Stop invoked at epoch %d" % (epoch+1))
                 # load last best model
-                self.load_model()
+                #self.load_model()
                 break
                                                                                                          
+        # loading best model
+        print ("Load best model")
+        self.load_model()
         print ("Done!")
 
     def save_model(self):
         # save all weights except embeddings which do not change and so don't need to be persistd
         feature_weights = self.feature_extractor.get_weights()[2:]        
-        concept_weights = self.concept_model.get_weights()
-        entity_weights = self.entity_model.get_weights()
+        concept_weights = self.concept_model.get_layer('Prediction').get_weights()
+        entity_weights = self.entity_model.get_layer('Prediction').get_weights()
         np.savez_compressed(self.save_path, features=feature_weights, 
                                             concept=concept_weights, 
-                                            entiti=entity_weights)
+                                            entity=entity_weights)
     
     def load_model(self):
         weights = np.load(self.save_path)
-        self.feature_extractor.set_weights([self.data.embeddings_matrix]*2 + weights['feature_weights'].tolist())                        
-        self.concept_model.set_weights(weights['concept_weights'])
-        self.entity_model.set_weights(weights['entity_weights'])
+        self.feature_extractor.set_weights([self.data.embeddings_matrix]*2 + weights['features'].tolist())                        
+        # if concept_model, entity_model only use a single projections, persisting and loading the 
+        # weight array changes the dimensionality of the lr weights
+        
+        
+        if weights['concept'][0].ndim == 1:            
+            self.concept_model.get_layer('Prediction').set_weights(
+                [weights['concept'][0][np.newaxis, :], weights['concept'][1]])
+            
+            self.entity_model.get_layer('Prediction').set_weights(
+                [weights['entity'][0][np.newaxis, :], weights['entity'][1]])
+        else:
+            self.concept_model.get_layer('Prediction').set_weights(weights['concept'])
+            self.entity_model.get_layer('Prediction').set_weights(weights['entity'])
                                  
         # this object generates the predictions from a model's learned parameters
-        self.evaluator.set_model(self.model)        
+        self.evaluator.set_model(self.feature_extractor, self.concept_model, self.entity_model)        
   
