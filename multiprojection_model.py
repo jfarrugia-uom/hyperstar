@@ -305,7 +305,8 @@ class MultiProjModel:
             if (no_gain_n >= self.patience):
                 print ("Early Stop invoked at epoch %d" % (epoch+1))
                 # load last best model
-                self.load_model()
+                if self.best_MAP > 0.:
+                    self.load_model()
                 break
                                                                                                          
         print ("Done!")
