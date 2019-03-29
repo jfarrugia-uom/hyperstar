@@ -5,7 +5,7 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 
 
-class CrimEvaluator:
+class CrimEvaluatorMax:
     def __init__(self, data, model):        
         # will need to reference some components in data
         self.data  = data
@@ -14,29 +14,34 @@ class CrimEvaluator:
     
     def set_model(self, model):
         self.model = model
-        
-    def algol(self, word, emb_matrix, dense, cluster_weight, bias, topN):
+            
+    
+    def algol_max(self, word, emb_matrix, dense, cluster_weight, bias, topN):
         word_id = self.data.tokenizer.word_index[word]
         
         # get projected query vector
         y_hat = np.dot(emb_matrix[word_id], dense)
         # unit-norm
         y_hat /= np.linalg.norm(y_hat, axis=1).reshape(-1,1)
+                    
+        sim_matrix = np.dot(emb_matrix[1:], y_hat.T)    
+        max_sim = np.max(sim_matrix, 1).reshape(1,-1)
+    
+        sim_matrix = np.dot(cluster_weight.T, max_sim) + bias
         
-        # combine projection with cluster weights and add bias terms
-        sim_matrix = np.dot(cluster_weight.T, np.dot(emb_matrix[1:], y_hat.T).T) + bias
-        # sort in descending order of linear combination of similarity
         sorted_sim = np.argsort(sim_matrix.flatten())[::-1][:topN]
         
         # reverse indices to words and also returns values
-        return list(map(lambda x: self.data.tokenizer.index_word[x+1], sorted_sim)), sim_matrix.flatten()[sorted_sim]                
-                        
+        return list(map(lambda x: self.data.tokenizer.index_word[x+1], sorted_sim)), sim_matrix.flatten()[sorted_sim]
+    
+        
       
     def predict_word(self, word, topN=15):
         # get embeddings
         #emb_matrix = self.model.get_layer(name='TermEmbedding').get_weights()[0]
         
         emb_matrix = [l for l in self.model.layers if type(l) == Model][0].get_layer(name='TermEmbedding').get_weights()[0]
+                
         
         # get transformation matrices
         dense = [l.get_weights()[0] for l in self.model.layers if type(l) == Dense and l.name.startswith('Phi') ]
@@ -46,7 +51,7 @@ class CrimEvaluator:
         cluster_weight = self.model.get_layer(name='Prediction').get_weights()[0]
         bias = self.model.get_layer(name='Prediction').get_weights()[1]
         
-        return self.algol(word, emb_matrix, dense, cluster_weight, bias, topN)[0]
+        return self.algol_max(word, emb_matrix, dense, cluster_weight, bias, topN)[0]
         
     
     def predict(self, dataset, topN=15):
@@ -60,7 +65,7 @@ class CrimEvaluator:
         # get embeddings
         #emb_matrix = self.model.get_layer(name='TermEmbedding').get_weights()[0]
         
-        emb_matrix = [l for l in self.model.layers if type(l) == Model][0].get_layer(name='TermEmbedding').get_weights()[0]
+        emb_matrix = [l for l in self.model.layers if type(l) == Model][0].get_layer(name='TermEmbedding').get_weights()[0]                
         
         # get transformation matrices
         dense = [l.get_weights()[0] for l in self.model.layers if type(l) == Dense and l.name.startswith('Phi') ]
@@ -74,7 +79,7 @@ class CrimEvaluator:
             if (idx + 1) % 100 == 0:
                 print ("Done", idx + 1)
                     
-            predicted_hypers = self.algol(word, emb_matrix, dense, cluster_weight, bias, topN)[0]
+            predicted_hypers = self.algol_max(word, emb_matrix, dense, cluster_weight, bias, topN)[0]
             results[word] = predicted_hypers
         
         return results        

@@ -15,6 +15,7 @@ from tensorflow.keras import backend as K
 import tensorflow as tf
 
 import numpy as np
+from scipy.stats import hmean
 
 import semeval_eval
 import crim_evaluator
@@ -22,7 +23,7 @@ import crim_evaluator
 
 # we'll model the embeddings layer as a separate model which we can resuse against the feature extraction
 # elements downstream 
-def get_embeddings_model(embeddings_matrix, synonym_sample_n):
+def get_embeddings_model(embeddings_matrix, synonym_sample_n, trainable=False):
     hypo_input  = Input(shape=(1,), name='Hyponym')
     neg_input = Input(shape=(synonym_sample_n,), name='Negative')
     hyper_input = Input(shape=(1,), name='Hypernym')
@@ -48,7 +49,7 @@ def get_embeddings_model(embeddings_matrix, synonym_sample_n):
 
     # inject pre-trained embeddings into this mini, resusable model/layer
     embedding_model.get_layer(name='TermEmbedding').set_weights([embeddings_matrix])
-    embedding_model.get_layer(name='TermEmbedding').trainable = False
+    embedding_model.get_layer(name='TermEmbedding').trainable = trainable
 
     embedding_model.get_layer(name='NegEmbedding').set_weights([embeddings_matrix])
     embedding_model.get_layer(name='NegEmbedding').trainable = False
@@ -74,7 +75,7 @@ class RandomIdentity(Initializer):
     def get_config(self):
         return {"dtype": self.dtype.name}
 
-class MultiProjModel:                
+class MultiProjModel(object):                
     
     def __init__(self, args):
         # contains important bits such as the tokeniser, batch augmentation logic, etc.
@@ -95,11 +96,10 @@ class MultiProjModel:
         
         # set  patience > epochs to avoid early stop
         self.patience          = args['patience']
+        self.minimum_patience  = args['minimum_patience']
         self.save_path         = args['save_path']
         self.eval_after_epoch  = args['eval_after_epoch']
-                
-        # build the embeddings sub-model
-        #self.embeddings_layer = self.get_term_embeddings_model()        
+                        
         
         # build and compile mode
         self.model = self.build_model()
@@ -130,6 +130,7 @@ class MultiProjModel:
         self.negative_sample_n = args['negative_sample_n']
         self.synonym_sample_n  = args['synonym_sample_n'] 
         self.patience          = args['patience']
+        self.minimum_patience  = args['minimum_patience']
         self.save_path         = args['save_path']
         self.eval_after_epoch  = args['eval_after_epoch']
         self.lr                = args['lr']
@@ -184,11 +185,12 @@ class MultiProjModel:
         phi_hyper    = Dot(axes=-1, normalize=True, name='SimHyper')([phi, hyper_embedding])
 
         if self.phi_k > 1:
+            # find projection which yields highest projection                                    
             phi_hyper = Flatten(name='Flatten_PhiHyper')(phi_hyper)        
             # in the case of multiple phi, calculate the mean similarity between each projection
             # and negative case
             phi_negative = Lambda(lambda x: K.mean(x, axis=1), name='MeanPhiNeg')(phi_negative)
-            
+                        
         
         zero_neg = Lambda(lambda x: K.mean(x * 0., axis=-1), name='ZeroPhiNeg') (phi_negative)    
         phi_hyper = Subtract(name='DummySub')([phi_hyper, zero_neg])    
@@ -226,7 +228,7 @@ class MultiProjModel:
         # initialise history object
         self.history = {metric:[] for metric in ['epoch', 'loss', 'test_loss', 'MAP', 'MRR']}
                                                  
-        self.best_MAP = 0.
+        self.best_score = 0.
         no_gain_n = 0
         
         for epoch in range(self.epochs):
@@ -278,10 +280,15 @@ class MultiProjModel:
 
                 epoch_test_map = scores['MAP']
                 epoch_test_mrr = scores['MRR']
+                if (epoch_test_map > 0 and epoch_test_mrr > 0):
+                    epoch_test_harmonic = np.round(hmean([epoch_test_map, epoch_test_mrr]), 5)
+                else:
+                    epoch_test_harmonic = 0.
                 
             else:
                 epoch_test_map = 0.
-                epoch_test_mrr = 0.                
+                epoch_test_mrr = 0.
+                epoch_test_harmonic = 0.
                                                                          
             self.history['epoch'].append(epoch)
             self.history['loss'].append(round(loss/train_update_count, 5))
@@ -294,18 +301,18 @@ class MultiProjModel:
                              round(test_loss/test_update_count, 5), epoch_test_map, epoch_test_mrr))
                                 
             # check whether to stop early
-            if (epoch_test_map > self.best_MAP):
-                self.best_MAP = epoch_test_map
+            if (epoch_test_harmonic > self.best_score):
+                self.best_score = epoch_test_harmonic
                 self.save_model()
                 no_gain_n = 0
-            # execute at least 3 epochs
-            elif (epoch >= 3):
+            # execute at least minimum_patience epochs
+            elif (epoch >= self.minimum_patience):
                 no_gain_n += 1
                         
             if (no_gain_n >= self.patience):
                 print ("Early Stop invoked at epoch %d" % (epoch+1))
                 # load last best model
-                if self.best_MAP > 0.:
+                if self.best_score > 0.:
                     self.load_model()
                 break
                                                                                                          

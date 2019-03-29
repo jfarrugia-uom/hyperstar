@@ -32,7 +32,7 @@ class SemevalData(crim_data.CrimData):
         vocab = args['vocabulary']
                 
         # create emtpy synonym dictionary not to break dependency
-        self.synonyms = {}
+        self.synonyms = args['synonyms']
         
                 
         print ("Creating tokenizer")        
